@@ -1,0 +1,157 @@
+podTemplate(yaml: '''
+    apiVersion: v1
+    kind: Pod
+    spec:
+      containers:
+      - name: maven
+        image: maven:3.8.1-jdk-8
+        command:
+        - sleep
+        args:
+        - 99d
+      - name: bash
+        image: bash:latest
+        command:
+        - sleep
+        args:
+        - 99d
+      - name: golang
+        image: golang:1.16.5
+        command:
+        - sleep
+        args:
+        - 99d
+      - name: groovy
+        image: groovy:4.0
+        command:
+        - sleep
+        args:
+        - 99d
+      - name: busybox
+        image: busybox
+        command:
+        - sleep
+        args:
+        - 99d
+      - name: docker-client
+        image: docker:latest
+        command: ['sleep', '99d']
+        env:
+          - name: DOCKER_HOST
+            value: tcp://localhost:2375
+      - name: docker-daemon
+        image: docker:dind
+        env:
+          - name: DOCKER_TLS_CERTDIR
+            value: ""
+        securityContext:
+          privileged: true
+        volumeMounts:
+            - name: cache
+              mountPath: /var/lib/docker
+      volumes:
+        - name: cache
+          hostPath:
+            path: /tmp
+            type: Directory          
+          
+          
+''') {
+  node(POD_LABEL) {
+    stage('Get a Maven project') {
+      container('maven') {
+        stage('Build a Maven project') {
+          sh 'mvn --version'
+        }
+      }
+    }
+
+    stage('Get a Golang project') {
+      container('golang') {
+        stage('Build a Go project') {
+          sh '''
+          go version
+          go version
+          go version
+          '''
+        }
+      }
+    }
+    
+    stage('Mixed container stage') {
+        container('groovy') {
+
+            sh """
+#!/bin/bash
+cat > Dockerfile <<- EOT
+
+FROM busybox as build
+RUN mkdir -p /out/mytestdir
+RUN echo "1" >> /out/mytestdir/1out.txt
+RUN echo "2" >> /out/mytestdir/1out.txt
+RUN sleep 5
+RUN echo "3" >> /out/mytestdir/1out.txt
+RUN echo "14" >> /out/mytestdir/1out.txt
+
+from busybox as phase1
+RUN mkdir -p /out/mytestdir
+RUN echo "1" >> /out/mytestdir/2out.txt
+RUN echo "2" >> /out/mytestdir/2out.txt
+RUN sleep 10
+RUN echo "3" >> /out/mytestdir/2out.txt
+RUN echo "14" > /out/mytestdir/2out.txt
+
+from build as phase99
+RUN mkdir -p /out/mytestdir
+RUN echo "3" > /out/mytestdir/99out.txt
+
+from busybox as phase2
+RUN mkdir -p /out/mytestdir
+RUN echo "1" >> /out/mytestdir/3out.txt
+RUN echo "2" >> /out/mytestdir/3out.txt
+RUN sleep 10
+RUN echo "3" >> /out/mytestdir/3out.txt
+RUN echo "4" >> /out/mytestdir/3out.txt
+
+
+from phase99 as final
+RUN mkdir -p /out/mytestdir
+RUN echo "1" >> /out/mytestdir/out.txt
+RUN echo "2" >> /out/mytestdir/out.txt
+RUN sleep 10
+RUN echo "3" >> /out/mytestdir/out.txt
+RUN echo "4" >> /out/mytestdir/out.txt
+COPY --from=build /out/mytestdir/1out.txt /out/mytestdir/
+COPY --from=phase1 /out/mytestdir/2out.txt /out/mytestdir/
+COPY --from=phase99 /out/mytestdir/99out.txt /out/mytestdir/
+COPY --from=build /out/mytestdir/1out.txt /out/mytestdir/
+COPY --from=phase1 /out/mytestdir/2out.txt /out/mytestdir/
+EOT
+"""
+        }
+    }
+    
+    stage('Reading the Dockerfile') {
+
+        container('groovy') {
+                sh "echo 'All good!' >> hello.txt"
+
+        }
+                
+        container('bash') {
+            sh "cat hello.txt"
+            sh "cat Dockerfile"
+            
+            retry(10) {
+                sh "sleep 1"
+                sh 'timeout 10 bash -c "</dev/tcp/localhost/2375"'
+            }
+        }
+        
+        container('docker-client') {
+            sh 'docker version && DOCKER_BUILDKIT=1 docker build --progress plain -t testing .'
+        }
+    }
+
+  }
+}
